@@ -1,0 +1,5 @@
+*.pyc
+*.ipynb_checkpoints
+.pytest_cache
+output
+!output/\.gitkeep
