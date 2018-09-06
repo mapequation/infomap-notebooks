@@ -189,7 +189,7 @@ class StateNetwork(object):
     #   physId = self.stateNodes[stateId].physicalId
     #   return self.physNodes[physId].getLumpedNodeFromStateNodeId(stateId)
 
-    def generateStateNetworkFromPaths(self, inputFilename, outputFilename, outputValidationFilename=None, markovOrder=2, validationProb=0.5, splitWeight=True):
+    def generateStateNetworkFromPaths(self, inputFilename, outputFilename, outputValidationFilename=None, markovOrder=2, validationProb=0.5, splitWeight=True, minPathLength=None, maxPathLength=None):
         """Read path data and generate second order state network
 
         @param inputFilename : string, path to file with *paths data
@@ -201,6 +201,7 @@ class StateNetwork(object):
         """
         context = None
         print("Read path data from file '{}'...".format(inputFilename))
+        np.random.seed(2)
         ngramToStateId = {}
         stateNetwork = StateNetwork()
         validationNetwork = StateNetwork()
@@ -229,7 +230,9 @@ class StateNetwork(object):
                 if context == 'Paths':
                     pathStr = line.split()
                     weight = int(pathStr.pop())
-                    if len(pathStr) <= markovOrder:
+                    length = len(pathStr)
+                    pathNotOk = length <= markovOrder or (maxPathLength and length > maxPathLength) or (minPathLength and length < minPathLength)
+                    if pathNotOk:
                         continue
                     path = [int(p) for p in pathStr]
                     weightValidation = 0
