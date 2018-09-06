@@ -1,3 +1,4 @@
+#%%
 from collections import namedtuple, defaultdict
 import re
 import numpy as np
@@ -30,9 +31,10 @@ class StateNode(object):
 
 
 class LumpedStateNode(object):
-    def __init__(self, physicalId=-1, lumpedStateId=-1):
+    def __init__(self, physicalId=-1, lumpedStateId=-1, clusterId=-1):
         self.lumpedStateId = lumpedStateId
         self.physicalId = physicalId
+        self.clusterId = clusterId
         self.stateIds = []
         self.outWeight = 0
         self.stateLinks = defaultdict(float)
@@ -69,9 +71,7 @@ class PhysNode(object):
         self.stateNodes = []
         self.clusters = {}  # stateId -> clusterIndex
         self.numClusters = 0
-        self.lumpedStateNodes = []
-        self.haveDanglingNodes = False
-        self.danglingStateNodes = []
+        self.lumpedStateNodes = {} # clusterIndex -> LumpedStateNode
         # self.outWeight = 0.0
 
     def __str__(self):
@@ -81,7 +81,10 @@ class PhysNode(object):
         return len(self.stateNodes)
 
     def numDanglingStateNodes(self):
-        return len(self.danglingStateNodes)
+        return len(self.getDanglingStateNodes())
+
+    def getDanglingStateNodes(self):
+        return [n for n in self.stateNodes if n.isDangling()]
 
     def getName(self):
         return self.name or self.physicalId
@@ -95,12 +98,17 @@ class PhysNode(object):
         return lumpedNode
 
     def createLumpedStateNodesFromClustering(self):
-        numLumpedNodes = self.numClusters
-        self.lumpedStateNodes = [LumpedStateNode(
-            self.physicalId) for i in range(numLumpedNodes)]
+        # numLumpedNodes = self.numClusters
+        self.lumpedStateNodes = {}
         for stateNode in self.stateNodes:
             clusterIndex = self.clusters[stateNode.stateId]
-            lumpedNode = self.lumpedStateNodes[clusterIndex]
+            try:
+                lumpedNode = self.lumpedStateNodes[clusterIndex]
+            except KeyError:
+                lumpedNode = LumpedStateNode(
+            self.physicalId, clusterId=clusterIndex)
+                self.lumpedStateNodes[clusterIndex] = lumpedNode
+                
             lumpedNode.stateIds.append(stateNode.stateId)
 
 
@@ -147,14 +155,16 @@ class StateNetwork(object):
         #   self.physNodes[physSource].outWeight += link.weight
 
     def addLumpedStateNode(self, lumpedStateNode):
-        lumpedStateId = len(self.lumpedStateNodes) + 1
-        lumpedStateNode.lumpedStateId = lumpedStateId
+        lumpedStateId = lumpedStateNode.lumpedStateId
+        if lumpedStateId == -1:
+            lumpedStateId = len(self.lumpedStateNodes) + 1
+            lumpedStateNode.lumpedStateId = lumpedStateId
         self.lumpedStateNodes[lumpedStateId] = lumpedStateNode
 
     def clearLumpedNodes(self):
         self.lumpedStateNodes.clear()
         for physNode in self.physNodes.values():
-            physNode.lumpedStateNodes = []
+            physNode.lumpedStateNodes = {}
     # def getLumpedNodeFromStateNodeId(self, stateId):
     #   physId = self.stateNodes[stateId].physicalId
     #   return self.physNodes[physId].getLumpedNodeFromStateNodeId(stateId)
@@ -261,7 +271,6 @@ class StateNetwork(object):
         for stateNode in physNode.stateNodes:
             # Skip dangling nodes
             if stateNode.isDangling():
-                physNode.danglingStateNodes.append(stateNode)
                 continue
             # row mapping: stateId to dense row index
             rowIndex = len(stateIdToRowIndex)
@@ -300,6 +309,15 @@ class StateNetwork(object):
                           mergeDanglingNodes=True,
                           skipLumping=False):
         """Generate a cluster map for all state nodes that is used when lumping them
+        
+        @param physicalNodeIds : list, cluster only selected physical nodes
+        @param physicalFeatures : bool, aggregate outgoing links to different 
+        physical nodes (reduces feature space, default: False)
+        @param clusterFeatureMatrix : callable, function that takes the feature matrix X as input and should return the clustering labels as a list
+        @param clusterRate : float, if no clusterFeatureMatrix or getNumClusters is provided, use default clustering method with the number of clusters set to clusterRate times the number of state nodes.
+        @param getNumClusters : callable, function that takes numStates as input and should return the number of clusters
+        @param mergeDanglingNodes : bool, put dangling nodes within same physical node into same cluster if true, else put them in their own clusters
+        @param skipLumping : bool, don't generate lumped network from clustering after clustering is done (default: False)
 
         """
         print("Cluster state nodes...")
@@ -333,18 +351,20 @@ class StateNetwork(object):
                 clusters[rowIndexToStateId[rowIndex]] = clusterIndex
                 if clusterIndex > maxClusterIndex:
                     maxClusterIndex = clusterIndex
-            if physNode.numDanglingStateNodes() > 0:
+            danglingStateNodes = physNode.getDanglingStateNodes()
+            numDanglingStateNodes = len(danglingStateNodes)
+            if numDanglingStateNodes > 0:
                 if mergeDanglingNodes:
                     # add dangling nodes to a separate last cluster
                     maxClusterIndex += 1
                     danglingClusterIndex = maxClusterIndex
-                    for danglingStateNode in physNode.danglingStateNodes:
+                    for danglingStateNode in danglingStateNodes:
                         clusters[danglingStateNode.stateId] = danglingClusterIndex
                 else:
                     # add dangling nodes to their own cluster
                     clusterIndex = maxClusterIndex + 1
-                    maxClusterIndex += physNode.numDanglingStateNodes()
-                    for danglingStateNode in physNode.danglingStateNodes:
+                    maxClusterIndex += numDanglingStateNodes
+                    for danglingStateNode in danglingStateNodes:
                         clusters[danglingStateNode.stateId] = clusterIndex
                         clusterIndex += 1
 
@@ -359,8 +379,101 @@ class StateNetwork(object):
         else:
             self.generateLumpedNetwork()
 
-    def generateLumpedNetwork(self):
+    def clusterStateNodesFromNetwork(self, network, skipLumping=False):
+        """Cluster state nodes from clustering in another network
+        @param network : StateNetwork, use clustering from network, mapping same input state ids to same lumped state ids. State nodes not in input network will not get lumped unless dangling nodes and will get state ids not among the lumped state ids.
+        @param skipLumping : bool, don't generate lumped network from clustering after clustering is done (default: False)
+        """
+        if network.numClusters == 0:
+            raise RuntimeError(
+                "No clusters in input network, did you forgot to run clustering before?")
+        print("Cluster state nodes from clustering in network {}...".format(network))
+        
+        self.clearLumpedNodes()
+        
+        uniqueLumpedId = network.numLumpedStateNodes() + 1
+        physIdToClusterIdToLumpedStateId = {}
+        totNumClusters = 0
+        for physId, physNode in self.physNodes.items():
+            uniqueDanglingNodes = []
+            uniqueNonDanglingNodes = []
+            clusters = {}
+            clusterIds = set()
+            uniqueClusterId = 0
+            clusterIdToLumpedStateId = {}
+            if not physId in network.physNodes:
+                # Physical node doesn't exist in other network, add all state nodes to list of unique
+                # print("\nphysId {} unique!".format(physId))
+                for stateNode in physNode.stateNodes:
+                    if stateNode.isDangling():
+                        uniqueDanglingNodes.append(stateNode)
+                    else:
+                        uniqueNonDanglingNodes.append(stateNode)
+            else:
+                # Physical node exist in other network, map same state nodes to same cluster
+                physNode2 = network.physNodes[physId]
+                clusters2 = physNode2.clusters
+                numClusters2 = physNode2.numClusters
+                uniqueClusterId = numClusters2
+
+                # print("\nphysId: {}, clusters2: {}".format(physId, clusters2))
+
+                for stateNode in physNode.stateNodes:
+                    try:
+                        clusterId2 = clusters2[stateNode.stateId]
+                        clusters[stateNode.stateId] = clusterId2
+                        clusterIds.add(clusterId2)
+                        # Use same lumped state id as in other network
+                        clusterIdToLumpedStateId[clusterId2] = physNode2.lumpedStateNodes[clusterId2].lumpedStateId
+                    except KeyError:
+                        if stateNode.isDangling():
+                            uniqueDanglingNodes.append(stateNode)
+                        else:
+                            uniqueNonDanglingNodes.append(stateNode)
+
+            # Put unique state nodes in their own lumped node
+            for stateNode in uniqueNonDanglingNodes:
+                clusters[stateNode.stateId] = uniqueClusterId
+                clusterIds.add(uniqueClusterId)
+                clusterIdToLumpedStateId[uniqueClusterId] = uniqueLumpedId
+                uniqueClusterId += 1
+                uniqueLumpedId += 1
+
+            # Lump dangling nodes
+            for stateNode in uniqueDanglingNodes:
+                clusters[stateNode.stateId] = uniqueClusterId
+                clusterIds.add(uniqueClusterId)
+                clusterIdToLumpedStateId[uniqueClusterId] = uniqueLumpedId
+
+            physNode.clusters = clusters
+            physIdToClusterIdToLumpedStateId[physId] = clusterIdToLumpedStateId
+
+            # physNode.clusters = clusters
+            numClusters = len(clusterIds)
+            physNode.numClusters = numClusters
+            totNumClusters += numClusters
+
+            # print(" -> {} clusters: {}, uniqueNonDanglingNodes: {}, uniqueDanglingNodes: {}".format(numClusters, clusters, [d.stateId for d in uniqueNonDanglingNodes], [d.stateId for d in uniqueDanglingNodes]))
+
+        self.numClusters = totNumClusters
+        if skipLumping:
+            print("Done!")
+        else:
+            self.generateLumpedNetwork()
+
+        # print("Generate lumped state network from clustering...")
+        # self.clearLumpedNodes()
+        # # First generate all lumped state nodes
+        # for physId, physNode in self.physNodes.items():
+        #     physNode.createLumpedStateNodesFromClustering()
+        #     for lumpedNode in physNode.lumpedStateNodes.values():
+        #         self.addLumpedStateNode(lumpedNode)
+        
+
+    def generateLumpedNetwork(self, physIdToClusterIdToLumpedStateId=None):
         """Generate lumped state network from clustering
+
+        @param physIdToClusterIdToLumpedStateId : {{}}, set lumped state id from this if not None, otherwise generate default sequence
         """
         if self.numClusters == 0:
             raise RuntimeError(
@@ -370,7 +483,9 @@ class StateNetwork(object):
         # First generate all lumped state nodes
         for physId, physNode in self.physNodes.items():
             physNode.createLumpedStateNodesFromClustering()
-            for lumpedNode in physNode.lumpedStateNodes:
+            for lumpedNode in physNode.lumpedStateNodes.values():
+                if physIdToClusterIdToLumpedStateId is not None:
+                    lumpedNode.lumpedStateId = physIdToClusterIdToLumpedStateId[physId][lumpedNode.clusterId]
                 self.addLumpedStateNode(lumpedNode)
         numLumpedStateLinks = 0
         # Aggregate state links to lumped state nodes
@@ -410,12 +525,11 @@ def calcClusters(X):
     labels = model.fit_predict(X)
     return labels
 
-
 def test():
     start = time.clock()
     
     sparseNet = StateNetwork()
-    sparseNet.readFromFile("../output/air2015_1_order_2.net")
+    sparseNet.readFromFile("data/toy_states.net")
     
     sparseNet.clusterStateNodes(clusterFeatureMatrix=calcClusters)
 
@@ -423,7 +537,18 @@ def test():
     h2 = sparseNet.calcLumpedEntropyRate()
     print("Entropy rate original: {}, lumped: {}".format(h1, h2))
     
-    sparseNet.writeLumpedStateNetwork("../output/air2015_1_order_lumped.net")
+    sparseNet.writeLumpedStateNetwork("output/toy_lumped.net")
+
+    validationNet = StateNetwork()
+    validationNet.readFromFile("data/toy_states2.net")
+
+    validationNet.clusterStateNodesFromNetwork(sparseNet)
+    h1 = validationNet.calcEntropyRate()
+    h2 = validationNet.calcLumpedEntropyRate()
+    print("Entropy rate original: {}, lumped: {}".format(h1, h2))
+    
+    validationNet.writeLumpedStateNetwork("output/toy2_lumped.net")
+
     
     print("Elapsed time: {}s".format(time.clock() - start))
 
