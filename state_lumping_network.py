@@ -6,9 +6,20 @@ from sklearn import preprocessing
 from sklearn import cluster
 import time
 from pathlib import Path
+from itertools import islice
 
 Link = namedtuple('Link', 'source, target, weight')
 
+def window(seq, n=2):
+    "Returns a sliding window (of width n) over data from the iterable"
+    "   s -> (s0,s1,...s[n-1]), (s1,s2,...,sn), ...                   "
+    it = iter(seq)
+    result = tuple(islice(it, n))
+    if len(result) == n:
+        yield result
+    for elem in it:
+        result = result[1:] + (elem,)
+        yield result
 
 class StateNode(object):
     def __init__(self, stateId, physicalId, name):
@@ -25,6 +36,9 @@ class StateNode(object):
     def addStateLink(self, stateTarget, weight):
         self.stateLinks[stateTarget] += weight
         self.outWeight += weight
+
+    def outDegree(self):
+        return len(self.stateLinks)
 
     def isDangling(self):
         return len(self.stateLinks) == 0
@@ -116,13 +130,13 @@ class StateNetwork(object):
     def __init__(self):
         self.physNodes = defaultdict(PhysNode)
         self.stateNodes = defaultdict(StateNode)
-        self.links = []
+        self.numLinks = 0
         self.totalWeight = 0.0
         self.lumpedStateNodes = defaultdict(LumpedStateNode)
         self.numClusters = 0
 
     def __str__(self):
-        return "StateNetwork ({} physical nodes, {} state nodes and {} links)".format(len(self.physNodes), len(self.stateNodes), len(self.links))
+        return "StateNetwork ({} physical nodes, {} state nodes and {} links)".format(len(self.physNodes), len(self.stateNodes), self.numLinks)
 
     def numPhysicalNodes(self):
         return len(self.physNodes)
@@ -140,15 +154,21 @@ class StateNetwork(object):
         return physNode
 
     def addStateNode(self, node):
+        if node.stateId in self.stateNodes:
+            return
         physNode = self.addPhysicalNode(node.physicalId)
         physNode.addStateNode(node)
         self.stateNodes[node.stateId] = node
 
     def addStateLink(self, link):
-        self.links.append(link)
+        # self.links.append(link)
         # physTarget = self.stateNodes[link.target].physicalId
         # self.stateNodes[link.source].addPhysLink(physTarget, link.weight)
+        outDegreeBefore = self.stateNodes[link.source].outDegree()
         self.stateNodes[link.source].addStateLink(link.target, link.weight)
+        outDegreeAfter = self.stateNodes[link.source].outDegree()
+
+        self.numLinks += outDegreeAfter - outDegreeBefore
         self.totalWeight += link.weight
         # physSource = self.stateNodes[link.source].physicalId
         # if physSource != physTarget:
@@ -169,6 +189,104 @@ class StateNetwork(object):
     #   physId = self.stateNodes[stateId].physicalId
     #   return self.physNodes[physId].getLumpedNodeFromStateNodeId(stateId)
 
+    def generateStateNetworkFromPaths(self, inputFilename, outputFilename, outputValidationFilename=None, markovOrder=2, validationProb=0.5, splitWeight=True):
+        """Read path data and generate second order state network
+
+        @param inputFilename : string, path to file with *paths data
+        @param outputFilename : string, path to output state network
+        @param outputValidationFilename : string, path to validation state network. If not None, the paths would be split into a training and a validation state network, keeping same stateId for state nodes with same physical n-gram, and non-overlapping state ids for state nodes unique to one set.
+        @param markovOrder : int, markov order of generated state network (default: 2) 
+        @param validationProb : float, probability to save a path to the validation network
+        @param splitWeight : bool, treat a path with weight n as n paths of weight 1 and save each individual path to validation network with probability validationProb
+        """
+        context = None
+        print("Read path data from file '{}'...".format(inputFilename))
+        ngramToStateId = {}
+        stateNetwork = StateNetwork()
+        validationNetwork = StateNetwork()
+        createValidationNetwork = outputValidationFilename is not None
+        with open(inputFilename, 'r') as fp:
+            for line in fp:
+                if line.startswith('#'):
+                    continue
+                if line.startswith('*'):
+                    l = line.lower()
+                    if l.startswith('*paths'):
+                        context = 'Paths'
+                        continue
+                    elif l.startswith('*vertices'):
+                        context = 'Vertices'
+                        continue
+                    else:
+                        context = '-'
+                        continue
+                # if context == 'Vertices':
+                #     m = re.match(r'(\d+)(?: \"(.+)\")?', line)
+                #     if m:
+                #         [physicalId, name] = m.groups()
+                #         node = PhysNode(int(physicalId), name)
+                #         self.addPhysicalNode(node)
+                if context == 'Paths':
+                    pathStr = line.split()
+                    weight = int(pathStr.pop())
+                    if len(pathStr) <= markovOrder:
+                        continue
+                    path = [int(p) for p in pathStr]
+                    weightValidation = 0
+                    if createValidationNetwork:
+                        if splitWeight:
+                            weightValidation = np.random.binomial(weight, validationProb)
+                        else:
+                            weightValidation = weight if np.random.random() < validationProb else 0
+                    weightTraining = weight - weightValidation
+                    addValidation = weightValidation > 0
+                    addTraining = weightTraining > 0
+                    # print("path:", path)
+                    prevStateId = None
+                    for ngram in window(path, markovOrder):
+                        # print(" -> ngram:", ngram)
+                        try:
+                            stateId = ngramToStateId[ngram]
+                        except KeyError:
+                            stateId = len(ngramToStateId) + 1
+                            ngramToStateId[ngram] = stateId
+                        
+                        # Create state node
+                        if addTraining:
+                            stateNode = StateNode(stateId, ngram[-1], ' '.join(map(str,ngram)))
+                            stateNetwork.addStateNode(stateNode)
+                            # print("  -> Add training state node:", stateNode)
+                        if addValidation:
+                            stateNode = StateNode(stateId, ngram[-1], ' '.join(map(str,ngram)))
+                            validationNetwork.addStateNode(stateNode)
+                            # print("  -> Add validation state node:", stateNode)
+
+                        if prevStateId is None:
+                            prevStateId = stateId
+                        else:
+                            # Add link
+                            if addTraining:
+                                link = Link(prevStateId, stateId, weightTraining)
+                                stateNetwork.addStateLink(link)
+                                # print("   => Add training link:", link, '-> numLinks:', stateNetwork.numLinks)
+                            if addValidation:
+                                link = Link(prevStateId, stateId, weightValidation)
+                                validationNetwork.addStateLink(link)
+                                # print("   => Add validation link:", link)
+                            prevStateId = stateId
+        print("Generated {}state network: {}".format("training " if createValidationNetwork else "", stateNetwork))
+        # print("Writing {}state network to file '{}...'".format("training " if createValidationNetwork else "", outputFilename))
+        stateNetwork.writeStateNetwork(outputFilename)
+        if createValidationNetwork:
+            # print("Writing validation state network to file '{}...'".format(outputFilename))
+            print("Generated validation state network: {}".format(validationNetwork))
+            validationNetwork.writeStateNetwork(outputValidationFilename)
+        # print(ngramToStateId)
+        # print("Training:", stateNetwork)
+        # print("Validation:", validationNetwork)
+        print("Done!")
+        
+
     def readFromFile(self, filename):
         context = None
         print("Read state network from file '{}'...".format(filename))
@@ -180,10 +298,16 @@ class StateNetwork(object):
                     l = line.lower()
                     if l.startswith('*states'):
                         context = 'States'
+                        continue
                     elif l.startswith('*links'):
                         context = 'Links'
+                        continue
                     elif l.startswith('*arcs'):
                         context = 'Links'
+                        continue
+                    else:
+                        context = '-'
+                        continue
                 if context == 'States':
                     m = re.match(r'(\d+) (\d+)(?: \"(.+)\")?', line)
                     if m:
@@ -198,6 +322,27 @@ class StateNetwork(object):
                         link = Link(int(source), int(target), float(weight))
                         self.addStateLink(link)
         print(" -> {}".format(self))
+
+    def writeStateNetwork(self, filename):
+        print("Writing state network to file '{}'...".format(filename))
+        with open(filename, 'w') as fp:
+            fp.write("# physical nodes: {}\n".format(self.numPhysicalNodes()))
+            fp.write("# state nodes: {}\n".format(self.numStateNodes()))
+            # vertices
+            fp.write("*Vertices\n")
+            for physId, physNode in self.physNodes.items():
+                fp.write("{} \"{}\"\n".format(physId, physNode.getName()))
+            # states
+            fp.write("*States\n")
+            fp.write("#stateId physicalId name\n")
+            for stateId, stateNode in self.stateNodes.items():
+                fp.write("{} {} \"{}\"\n".format(stateId,
+                                                 stateNode.physicalId, stateNode.name))
+            # links
+            fp.write("*Links\n")
+            for sourceId, stateNode in self.stateNodes.items():
+                for targetId, weight in stateNode.stateLinks.items():
+                    fp.write("{} {} {}\n".format(sourceId, targetId, weight))
 
     def writeLumpedStateNetwork(self, filename):
         print("Writing lumped state network to file '{}'...".format(filename))
@@ -525,7 +670,7 @@ def calcClusters(X):
     labels = model.fit_predict(X)
     return labels
 
-def test():
+def testValidate():
     start = time.clock()
     
     sparseNet = StateNetwork()
@@ -552,5 +697,10 @@ def test():
     
     print("Elapsed time: {}s".format(time.clock() - start))
 
+def testPaths():
+    net = StateNetwork()
+    net.generateStateNetworkFromPaths("data/toy_paths.net", "output/toy_paths_states_training.net", "output/toy_paths_states_validation.net" and None, splitWeight=True, markovOrder=2)
+
 if __name__ == '__main__':
-    test()
+    testPaths()
+
