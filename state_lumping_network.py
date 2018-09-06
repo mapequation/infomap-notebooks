@@ -202,6 +202,9 @@ class StateNetwork(object):
         context = None
         print("Read path data from file '{}'...".format(inputFilename))
         np.random.seed(2)
+        numReturns = 0
+        numPaths = 0
+        numOkPaths = 0
         ngramToStateId = {}
         stateNetwork = StateNetwork()
         validationNetwork = StateNetwork()
@@ -228,13 +231,18 @@ class StateNetwork(object):
                 #         node = PhysNode(int(physicalId), name)
                 #         self.addPhysicalNode(node)
                 if context == 'Paths':
+                    numPaths += 1
                     pathStr = line.split()
                     weight = int(pathStr.pop())
                     length = len(pathStr)
                     pathNotOk = length <= markovOrder or (maxPathLength and length > maxPathLength) or (minPathLength and length < minPathLength)
                     if pathNotOk:
+                        # print("Discarding path:", pathStr)
                         continue
                     path = [int(p) for p in pathStr]
+                    numOkPaths += 1
+                    if path[0] == path[-1]:
+                        numReturns += 1
                     weightValidation = 0
                     if createValidationNetwork:
                         if splitWeight:
@@ -277,6 +285,9 @@ class StateNetwork(object):
                                 validationNetwork.addStateLink(link)
                                 # print("   => Add validation link:", link)
                             prevStateId = stateId
+        print("Done, parsed {}/{} paths".format(numOkPaths, numPaths))
+        print(" -> {} return paths".format(numReturns))
+      
         print("Generated {}state network: {}".format("training " if createValidationNetwork else "", stateNetwork))
         # print("Writing {}state network to file '{}...'".format("training " if createValidationNetwork else "", outputFilename))
         stateNetwork.writeStateNetwork(outputFilename)
