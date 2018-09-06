@@ -22,6 +22,6 @@ Unit | Topic | Notebook
 ----|----|----
 1.1 | Introduction to [`Infomap`](http://www.mapequation.org) | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/1_1_infomap_intro.ipynb) |
 1.2 | Explore flight path data with Infomap and [`interactive visualisations`](http://www.mapequation.org/apps.html) | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/1_2_explore_flight_data.ipynb) |
-1.3 | Introduction to [`sparse higher-order networks`](http://www.mapequation.org/publications.html#Edler-Etal-2017-MappingHigherOrder) | [.ipynb](https://github.com/IngoScholtes/kdd2018-tutorial/blob/master/code/1_3_sparse_state_lumping.ipynb) |
-1.4 | Sparse networks for flight data | [.ipynb](https://github.com/IngoScholtes/kdd2018-tutorial/blob/master/code/1_4_sparse_flight_data.ipynb) |
+1.3 | Introduction to [`sparse higher-order networks`](http://www.mapequation.org/publications.html#Edler-Etal-2017-MappingHigherOrder) | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/1_3_sparse_state_lumping.ipynb) |
+1.4 | Sparse networks for flight data | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/1_4_sparse_flight_data.ipynb) |
 
