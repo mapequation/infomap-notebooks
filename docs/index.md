@@ -18,10 +18,10 @@ A detailed description on how to set up the environment can be found in the [set
 
 ## Introduction to Higher-Order Graph Clustering with [Infomap](http://www.mapequation.org)
 
-Unit | Topic | Notebook | Live Solution
-----|----|----|----
-2.1 | Introduction to [`Infomap`](http://www.mapequation.org) | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/2_1_infomap_intro.ipynb) |
-2.2 | Explore flight path data with Infomap and [`interactive visualisations`](http://www.mapequation.org/apps.html) | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/2_2_explore_flight_data.ipynb) |
-2.3 | Introduction to [`sparse higher-order networks`](http://www.mapequation.org/publications.html#Edler-Etal-2017-MappingHigherOrder) | [.ipynb](https://github.com/IngoScholtes/kdd2018-tutorial/blob/master/code/2_3_sparse_state_lumping.ipynb) |
-2.4 | Sparse networks for flight data | [.ipynb](https://github.com/IngoScholtes/kdd2018-tutorial/blob/master/code/2_4_sparse_flight_data.ipynb) |
+Unit | Topic | Notebook
+----|----|----
+1.1 | Introduction to [`Infomap`](http://www.mapequation.org) | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/1_1_infomap_intro.ipynb) |
+1.2 | Explore flight path data with Infomap and [`interactive visualisations`](http://www.mapequation.org/apps.html) | [.ipynb](https://github.com/mapequation/infomap-notebooks/blob/master/code/1_2_explore_flight_data.ipynb) |
+1.3 | Introduction to [`sparse higher-order networks`](http://www.mapequation.org/publications.html#Edler-Etal-2017-MappingHigherOrder) | [.ipynb](https://github.com/IngoScholtes/kdd2018-tutorial/blob/master/code/1_3_sparse_state_lumping.ipynb) |
+1.4 | Sparse networks for flight data | [.ipynb](https://github.com/IngoScholtes/kdd2018-tutorial/blob/master/code/1_4_sparse_flight_data.ipynb) |
 
